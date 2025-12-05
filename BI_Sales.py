@@ -1,8 +1,11 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import sqlite3
 import pandas as pd
 import altair as alt
 import calendar
+import os
+import textwrap
 
 try:
     from statsmodels.tsa.holtwinters import ExponentialSmoothing
@@ -13,6 +16,173 @@ except ImportError as exc:
 
 st.set_page_config(page_title="Aghzia", layout="wide")
 
+if "app_bg_color" not in st.session_state:
+    st.session_state["app_bg_color"] = "#0b1220"
+
+style_template = textwrap.dedent(
+    """
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+        :root {{
+            --card-bg: #ffffff;
+            --card-border: rgba(15, 23, 42, 0.06);
+            --surface-soft: {bg_color};
+        }}
+        html, body, [data-testid="stAppViewContainer"], .main {{
+            background: var(--surface-soft);
+            font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+        }}
+        .block-container {{
+            padding-top: 1.2rem;
+            padding-bottom: 3rem;
+            max-width: 1300px;
+        }}
+        @media (max-width: 768px) {{
+            .block-container {{
+                padding: 0.75rem 0.65rem 2.5rem;
+            }}
+            section[data-testid="stSidebar"] {{
+                width: 100% !important;
+                border-radius: 20px;
+                margin-bottom: 1rem;
+            }}
+            section[data-testid="stSidebar"] > div {{
+                max-width: none !important;
+                padding-bottom: 1rem;
+            }}
+        }}
+        section[data-testid="stSidebar"] {{
+            background: linear-gradient(180deg, #071b35, #0c284f);
+            color: #f8fafc;
+            border-radius: 28px;
+            padding-top: 0.5rem;
+        }}
+        section[data-testid="stSidebar"] * {{
+            color: inherit !important;
+        }}
+        section[data-testid="stSidebar"] .css-1p5uq2i {{
+            color: #f8fafc !important;
+        }}
+        .kpi-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 0.75rem;
+            width: 100%;
+        }}
+        @media (max-width: 768px) {{
+            .kpi-grid {{
+                grid-template-columns: 1fr;
+                gap: 0.6rem;
+            }}
+        }}
+        .kpi-card {{
+            border-radius: 20px;
+            padding: 1.1rem 1.25rem;
+            background: #ffffff;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            box-shadow: none;
+            display: flex;
+            flex-direction: column;
+            gap: 0.45rem;
+            width: 100%;
+        }}
+        .stat-header {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+        }}
+        .stat-group {{
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+        }}
+        .stat-icon {{
+            width: 36px;
+            height: 36px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            background: rgba(15, 23, 42, 0.06);
+            color: #0f172a;
+        }}
+        .stat-label {{
+            font-size: 0.78rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            color: #475569;
+        }}
+        .stat-chip {{
+            padding: 0.15rem 0.65rem;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            background: rgba(15, 23, 42, 0.08);
+            color: #0f172a;
+        }}
+        .stat-value {{
+            font-size: 2.05rem;
+            font-weight: 700;
+            color: #0f172a;
+            line-height: 1.1;
+        }}
+        .stat-secondary {{
+            font-size: 0.85rem;
+            color: #64748b;
+            font-weight: 600;
+        }}
+        .stat-progress {{
+            height: 6px;
+            width: 100%;
+            border-radius: 999px;
+            background: rgba(15, 23, 42, 0.08);
+            overflow: hidden;
+        }}
+        .stat-progress-bar {{
+            height: 100%;
+            width: var(--progress, 100%);
+            background: var(--accent, #1e88e5);
+            border-radius: inherit;
+            transition: width 0.4s ease;
+        }}
+        @media (max-width: 480px) {{
+            .kpi-card {{
+                padding: 0.95rem 1rem;
+            }}
+        }}
+        .mobile-stack > div {{
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }}
+        @media (max-width: 768px) {{
+            .stRadio > div {{
+                flex-direction: column !important;
+                alignments: flex-start !important;
+                gap: 0.35rem !important;
+            }}
+        }}
+        .filter-chip {{
+            display: inline-flex;
+            align-items: center;
+            padding: 0.2rem 0.75rem;
+            border-radius: 999px;
+            background: rgba(15, 23, 42, 0.08);
+            font-size: 0.8rem;
+            margin: 0 0.25rem 0.3rem 0;
+        }}
+    </style>
+    """
+)
+
+st.markdown(
+    style_template.format(bg_color=st.session_state["app_bg_color"]),
+    unsafe_allow_html=True,
+)
+
 st.title("BI.Commercial 💵")
 st.markdown(
     "<span style='display:block;margin-top:-20px;'>Turn The decision UP 🚀</span>",
@@ -20,58 +190,78 @@ st.markdown(
 )
 kpi_container = st.container()
 
+st.sidebar.color_picker(
+    "App background",
+    value=st.session_state["app_bg_color"],
+    key="app_bg_color_picker",
+)
+if st.session_state["app_bg_color_picker"] != st.session_state["app_bg_color"]:
+    st.session_state["app_bg_color"] = st.session_state["app_bg_color_picker"]
+    st.experimental_rerun()
+
 st.sidebar.markdown("### Data Source")
 uploaded_file = st.sidebar.file_uploader("Upload SQLite DB", type=["db", "sqlite", "sqlite3"])
 
+TEMP_DB_PATH = "temp.db"
+
 if uploaded_file:
-    # Load DB into temp memory
-    conn = sqlite3.connect(":memory:")
-    with open("temp.db", "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    file_conn = sqlite3.connect("temp.db")
+    st.session_state["db_bytes"] = uploaded_file.getvalue()
+    st.session_state["db_name"] = uploaded_file.name
+    with open(TEMP_DB_PATH, "wb") as f:
+        f.write(st.session_state["db_bytes"])
+elif "db_bytes" not in st.session_state and os.path.exists(TEMP_DB_PATH):
+    with open(TEMP_DB_PATH, "rb") as f:
+        st.session_state["db_bytes"] = f.read()
+    st.session_state.setdefault("db_name", os.path.basename(TEMP_DB_PATH))
 
-    # Read tables
-    try:
-        processed = pd.read_sql_query("SELECT * FROM processed_data", file_conn)
-        master = pd.read_sql_query("SELECT * FROM FGData", file_conn)
-    except Exception as e:
-        st.error(f"Error reading required tables: {e}")
-        st.stop()
+if "db_bytes" not in st.session_state:
+    st.sidebar.info("Please upload a SQLite database to get started.")
+    st.stop()
 
-    st.sidebar.success("DB Loaded Successfully")
+file_conn = sqlite3.connect(TEMP_DB_PATH)
 
-    # Merge with flexible column detection (master uses ItemNumber, processed uses item_code)
-    master_item_col = next((c for c in master.columns if c.lower() == "itemnumber"), None)
-    processed_item_col = next((c for c in processed.columns if c.lower() in {"item_code", "itemnumber", "itemcode"}), None)
+# Read tables
+try:
+    processed = pd.read_sql_query("SELECT * FROM processed_data", file_conn)
+    master = pd.read_sql_query("SELECT * FROM FGData", file_conn)
+except Exception as e:
+    st.error(f"Error reading required tables: {e}")
+    st.stop()
 
-    if processed_item_col and master_item_col:
-        merged = processed.merge(master, left_on=processed_item_col, right_on=master_item_col, how="left")
-    else:
-        st.error(
-            "Columns for linking not found. processed_data columns: "
-            f"{processed.columns.tolist()} | FGData columns: {master.columns.tolist()}"
-        )
-        st.stop()
+st.sidebar.success(f"DB Loaded Successfully ({st.session_state.get('db_name', 'temp.db')})")
 
-    # Prepare date column if available
-    date_col_name = next((c for c in merged.columns if c.lower() == 'date'), None)
-    has_date_column = date_col_name is not None
-    if has_date_column:
-        merged['_date_dt'] = pd.to_datetime(merged[date_col_name], errors='coerce')
+# Merge with flexible column detection (master uses ItemNumber, processed uses item_code)
+master_item_col = next((c for c in master.columns if c.lower() == "itemnumber"), None)
+processed_item_col = next((c for c in processed.columns if c.lower() in {"item_code", "itemnumber", "itemcode"}), None)
 
-    # Sidebar filters
-    st.sidebar.header("Filters")
-    df_view = merged.copy()
+if processed_item_col and master_item_col:
+    merged = processed.merge(master, left_on=processed_item_col, right_on=master_item_col, how="left")
+else:
+    st.error(
+        "Columns for linking not found. processed_data columns: "
+        f"{processed.columns.tolist()} | FGData columns: {master.columns.tolist()}"
+    )
+    st.stop()
 
-    metric_col = None
-    metric_label = "Value"
-    metric_focus_name = "Metric"
-    metric_focus_short = "Metric"
-    vol_val_options = []
-    if 'qty_soldx' in df_view.columns:
-        vol_val_options.append(("Volume (qty_soldx)", 'qty_soldx', 'qty_soldx sum', "Volume"))
-    if 'sold_amount' in df_view.columns:
-        vol_val_options.append(("Value (sold_amount)", 'sold_amount', 'sold_amount sum', "Value"))
+# Prepare date column if available
+date_col_name = next((c for c in merged.columns if c.lower() == 'date'), None)
+has_date_column = date_col_name is not None
+if has_date_column:
+    merged['_date_dt'] = pd.to_datetime(merged[date_col_name], errors='coerce')
+
+# Sidebar filters
+st.sidebar.header("Filters")
+df_view = merged.copy()
+
+metric_col = None
+metric_label = "Value"
+metric_focus_name = "Metric"
+metric_focus_short = "Metric"
+vol_val_options = []
+if 'qty_soldx' in df_view.columns:
+    vol_val_options.append(("Volume (qty_soldx)", 'qty_soldx', 'qty_soldx sum', "Volume"))
+if 'sold_amount' in df_view.columns:
+    vol_val_options.append(("Value (sold_amount)", 'sold_amount', 'sold_amount sum', "Value"))
 
     if vol_val_options:
         metric_choice = st.sidebar.radio(
@@ -283,20 +473,112 @@ if uploaded_file:
 
         def render_cards(cards):
             cols = st.columns(len(cards), gap="small")
+            max_raw = max((card.get("value_raw", 0) for card in cards), default=1) or 1
             for col, card in zip(cols, cards):
-                col.markdown(
-                    f"""
-                    <div class='kpi-card' style='border-top: 4px solid {card["accent"]};'>
-                        <div class='kpi-icon' style='background: {card["accent_rgba"]}; color: {card["accent"]};'>
-                            {card["icon"]}
-                        </div>
-                        <div class='kpi-title'>{card["title"].upper()}</div>
-                        <div class='kpi-value' style='{card.get("value_style", "")}'>{card["value"]}</div>
-                        {f"<div class='kpi-secondary'>{card['secondary']}</div>" if card.get('secondary') else ''}
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
+                progress = card.get("value_raw", 0) / max_raw
+                progress = min(max(progress, 0.08), 1)
+                chip_label = card.get("chip_label", metric_focus_short)
+                secondary_html = (
+                    f"<div class='stat-secondary'>{card['secondary']}</div>" if card.get("secondary") else ""
                 )
+                card_html = textwrap.dedent(
+                    f"""
+                    <style>
+                        .tile-wrapper {{
+                            background: #fff;
+                            border-radius: 20px;
+                            padding: 1.1rem 1.25rem;
+                            font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+                            color: #0f172a;
+                            border: 1px solid rgba(15, 23, 42, 0.08);
+                            display: flex;
+                            flex-direction: column;
+                            gap: 0.45rem;
+                        }}
+                        .tile-header {{
+                            display: flex;
+                            align-items: center;
+                            justify-content: space-between;
+                            gap: 0.75rem;
+                        }}
+                        .tile-group {{
+                            display: flex;
+                            align-items: center;
+                            gap: 0.55rem;
+                        }}
+                        .tile-icon {{
+                            width: 36px;
+                            height: 36px;
+                            border-radius: 12px;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            font-size: 1.1rem;
+                            background: {card["accent_rgba"]};
+                            color: {card["accent"]};
+                        }}
+                        .tile-label {{
+                            font-size: 0.78rem;
+                            font-weight: 600;
+                            letter-spacing: 0.08em;
+                            color: #475569;
+                        }}
+                        .tile-chip {{
+                            padding: 0.15rem 0.65rem;
+                            border-radius: 999px;
+                            font-size: 0.72rem;
+                            font-weight: 600;
+                            text-transform: uppercase;
+                            background: rgba(15, 23, 42, 0.08);
+                            color: #0f172a;
+                        }}
+                        .tile-value {{
+                            font-size: 2.05rem;
+                            font-weight: 700;
+                            color: #0f172a;
+                            line-height: 1.1;
+                        }}
+                        .tile-secondary {{
+                            font-size: 0.85rem;
+                            color: #64748b;
+                            font-weight: 600;
+                        }}
+                        .tile-progress {{
+                            height: 6px;
+                            width: 100%;
+                            border-radius: 999px;
+                            background: rgba(15, 23, 42, 0.08);
+                            overflow: hidden;
+                        }}
+                        .tile-progress-bar {{
+                            height: 100%;
+                            width: {progress*100:.0f}%;
+                            background: {card["accent"]};
+                            border-radius: inherit;
+                            transition: width 0.4s ease;
+                        }}
+                    </style>
+                    <div class='tile-wrapper'>
+                        <div class='tile-header'>
+                            <div class='tile-group'>
+                                <div class='tile-icon'>{card["icon"]}</div>
+                                <div>
+                                    <div class='tile-label'>{card["title"].upper()}</div>
+                                    <div class='tile-chip'>{chip_label}</div>
+                                </div>
+                            </div>
+                            <span style='font-size:0.78rem;font-weight:600;color:{card["accent"]};'>Live</span>
+                        </div>
+                        <div class='tile-value' style='{card.get("value_style", "")}'>{card["value"]}</div>
+                        {secondary_html or ""}
+                        <div class='tile-progress'>
+                            <div class='tile-progress-bar'></div>
+                        </div>
+                    </div>
+                    """
+                ).strip()
+                with col:
+                    components.html(card_html, height=240, scrolling=False)
 
         primary_cards = [
             {
@@ -434,7 +716,7 @@ if uploaded_file:
     )
 
     if 'show_filtered_data' not in st.session_state:
-        st.session_state['show_filtered_data'] = True
+        st.session_state['show_filtered_data'] = False
 
     toggle_label = "Hide Filtered Data" if st.session_state['show_filtered_data'] else "Show Filtered Data"
     if st.sidebar.button(toggle_label):
