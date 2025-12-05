@@ -255,6 +255,7 @@ if has_date_column:
 # Sidebar filters
 st.sidebar.header("Filters")
 df_view = merged.copy()
+selected_item_label = None
 
 metric_col = None
 metric_label = "Value"
@@ -337,17 +338,56 @@ if 'sold_amount' in df_view.columns:
             cols_to_keep.append(item_name_col)
         item_values = df_view[cols_to_keep].dropna(subset=[item_col])
         if item_name_col:
-            item_options = ["All"] + [
-                f"{row[item_col]} - {row[item_name_col]}" for _, row in item_values.drop_duplicates(item_col).iterrows()
-            ]
+            unique_items_df = (
+                item_values.drop_duplicates(item_col)
+                .assign(
+                    display=lambda df: df[item_col].astype(str).str.strip() + " - " + df[item_name_col].astype(str).str.strip()
+                )
+            )
+            search_query = st.sidebar.text_input(
+                "Search ItemNumber or Name",
+                value="",
+                placeholder="Type to search...",
+                key="item_search_query_with_name",
+            ).strip()
+            filtered_df = unique_items_df
+            if search_query:
+                lowered = search_query.lower()
+                match_mask = (
+                    unique_items_df[item_col].astype(str).str.lower().str.contains(lowered, na=False)
+                    | unique_items_df[item_name_col].astype(str).str.lower().str.contains(lowered, na=False)
+                    | unique_items_df["display"].str.lower().str.contains(lowered, na=False)
+                )
+                filtered_df = unique_items_df[match_mask]
+            if filtered_df.empty:
+                st.sidebar.info("No items match your search. Showing all items.")
+                filtered_df = unique_items_df
+            item_display_map = dict(zip(unique_items_df["display"], unique_items_df[item_col]))
+            item_options = ["All"] + filtered_df["display"].tolist()
             selection = st.sidebar.selectbox("ItemNumber", item_options)
             if selection != "All":
-                selected_item = selection.split(" - ")[0]
-                df_view = df_view[df_view[item_col] == selected_item]
+                selected_item_value = item_display_map.get(selection)
+                if selected_item_value is not None:
+                    selected_item_label = selection
+                    df_view = df_view[df_view[item_col] == selected_item_value]
         else:
             items = sorted(item_values[item_col].unique().tolist())
-            selected_item = st.sidebar.selectbox("ItemNumber", ["All"] + items)
+            search_query = st.sidebar.text_input(
+                "Search ItemNumber",
+                value="",
+                placeholder="Type to search...",
+                key="item_search_query_number_only",
+            ).strip()
+            filtered_items = items
+            if search_query:
+                lowered = search_query.lower()
+                filtered_items = [item for item in items if lowered in str(item).lower()]
+            if not filtered_items:
+                st.sidebar.info("No items match your search. Showing all items.")
+                filtered_items = items
+            selected_item = st.sidebar.selectbox("ItemNumber", ["All"] + filtered_items)
             if selected_item != "All":
+                selected_item_label = f"{selected_item}"
                 df_view = df_view[df_view[item_col] == selected_item]
 
     # Date range filter
@@ -859,6 +899,177 @@ if 'sold_amount' in df_view.columns:
             render_group_bar(column_name, label.split()[0])
     elif not metric_col:
         st.info("Cannot build group charts because no qty_soldx, sold_amount, or sales columns were found.")
+
+    if metric_col and metric_col in df_view.columns and item_col and item_col in df_view.columns:
+        item_name_lookup = None
+        if item_name_col and item_name_col in df_view.columns:
+            item_name_lookup = (
+                df_view[[item_col, item_name_col]]
+                .dropna(subset=[item_col])
+                .drop_duplicates(item_col)
+                .set_index(item_col)[item_name_col]
+                .to_dict()
+            )
+
+        abc_source = (
+            df_view.groupby(item_col)[metric_col]
+            .sum()
+            .reset_index(name='metric_total')
+            .sort_values('metric_total', ascending=False)
+        )
+        abc_source = abc_source[abc_source['metric_total'] > 0]
+
+        if not abc_source.empty:
+            overall_total = abc_source['metric_total'].sum()
+            if overall_total == 0:
+                st.info("ABC-XYZ matrix unavailable because the current metric totals zero after filters.")
+            else:
+                abc_source['cumulative_pct'] = abc_source['metric_total'].cumsum() / overall_total * 100
+
+                def classify_abc(pct):
+                    if pct <= 80:
+                        return "A"
+                    elif pct <= 95:
+                        return "B"
+                    return "C"
+
+                abc_source['ABC'] = abc_source['cumulative_pct'].apply(classify_abc)
+
+                xyz_source = None
+                if '_date_dt' in df_view.columns and df_view['_date_dt'].notna().any():
+                    monthly_item = (
+                        df_view.dropna(subset=['_date_dt'])
+                        .assign(month=lambda d: d['_date_dt'].dt.to_period('M').dt.to_timestamp())
+                        .groupby([item_col, 'month'])[metric_col]
+                        .sum()
+                        .reset_index(name='monthly_metric')
+                    )
+                    if not monthly_item.empty:
+                        variability = (
+                            monthly_item.groupby(item_col)['monthly_metric']
+                            .agg(['mean', 'std'])
+                            .reset_index()
+                            .rename(columns={'mean': 'mean_metric', 'std': 'std_metric'})
+                        )
+                        variability['std_metric'] = variability['std_metric'].fillna(0)
+                        variability['cv'] = variability.apply(
+                            lambda row: row['std_metric'] / row['mean_metric'] if row['mean_metric'] else float('inf'),
+                            axis=1,
+                        )
+
+                        def classify_xyz(cv):
+                            if cv <= 0.5:
+                                return "X"
+                            elif cv <= 1.0:
+                                return "Y"
+                            return "Z"
+
+                        variability['XYZ'] = variability['cv'].apply(classify_xyz)
+                        xyz_source = variability[[item_col, 'XYZ', 'cv']]
+
+                if xyz_source is not None:
+                    classification_result = abc_source.merge(xyz_source, on=item_col, how='left')
+                else:
+                    classification_result = abc_source.assign(cv=pd.NA, XYZ="Z")
+
+                classification_result['XYZ'] = classification_result['XYZ'].fillna("Z")
+                classification_result['share_pct'] = classification_result['metric_total'] / overall_total * 100
+                if item_name_lookup:
+                    classification_result['ItemDisplay'] = classification_result[item_col].apply(
+                        lambda code: f"{code} - {item_name_lookup.get(code, '')}".strip(" -")
+                    )
+                else:
+                    classification_result['ItemDisplay'] = classification_result[item_col].astype(str)
+
+                matrix = (
+                    classification_result.groupby(['ABC', 'XYZ'])
+                    .agg(
+                        items_count=(item_col, 'nunique'),
+                        metric_total=('metric_total', 'sum'),
+                        share_pct=('share_pct', 'sum'),
+                    )
+                    .reset_index()
+                )
+
+                class_items = (
+                    classification_result.groupby(['ABC', 'XYZ'])['ItemDisplay']
+                    .apply(
+                        lambda s: ", ".join(s.astype(str).head(3))
+                        + (" …" if len(s) > 3 else "")
+                    )
+                    .reset_index(name='items_preview')
+                )
+                matrix = matrix.merge(class_items, on=['ABC', 'XYZ'], how='left')
+
+                matrix['ABC'] = pd.Categorical(matrix['ABC'], categories=['A', 'B', 'C'], ordered=True)
+                matrix['XYZ'] = pd.Categorical(matrix['XYZ'], categories=['X', 'Y', 'Z'], ordered=True)
+                matrix = matrix.sort_values(['ABC', 'XYZ'])
+
+                st.markdown("---")
+                st.subheader("ABC-XYZ Item Matrix")
+
+                if xyz_source is None:
+                    st.caption("XYZ classes default to Z because there is no date granularity to measure demand variability.")
+
+                chart = (
+                    alt.Chart(matrix)
+                    .mark_circle()
+                    .encode(
+                        x=alt.X('ABC:N', sort=['A', 'B', 'C'], title='ABC Class (Value Contribution)'),
+                        y=alt.Y('XYZ:N', sort=['X', 'Y', 'Z'], title='XYZ Class (Demand Variability)'),
+                        size=alt.Size('metric_total:Q', title=f'Total {metric_focus_short}', scale=alt.Scale(range=[50, 900])),
+                        color=alt.Color(
+                            'ABC:N',
+                            legend=None,
+                            scale=alt.Scale(
+                                domain=['A', 'B', 'C'],
+                                range=['#66d9e8', '#ffd166', '#ff6b6b'],
+                            ),
+                        ),
+                        tooltip=[
+                            alt.Tooltip('ABC:N', title='ABC Class'),
+                            alt.Tooltip('XYZ:N', title='XYZ Class'),
+                            alt.Tooltip('items_count:Q', title='Items'),
+                            alt.Tooltip('share_pct:Q', title='% of Total', format='.1f'),
+                            alt.Tooltip('items_preview:N', title='Sample Items'),
+                        ],
+                    )
+                    .properties(height=320)
+                )
+
+                labels = (
+                    alt.Chart(matrix)
+                    .mark_text(fontWeight=600, color='#f8fafc')
+                    .encode(
+                        x='ABC:N',
+                        y='XYZ:N',
+                        text='items_preview:N',
+                    )
+                )
+
+                layered_chart = (chart + labels).configure_view(
+                    strokeWidth=0,
+                ).configure(background='#0b1220')
+                st.altair_chart(layered_chart, use_container_width=True)
+
+                display_df = classification_result[[item_col, 'ItemDisplay', 'metric_total', 'share_pct', 'ABC', 'XYZ', 'cv']].copy()
+                display_df = display_df.sort_values(['ABC', 'metric_total'], ascending=[True, False])
+                display_df.rename(
+                    columns={
+                        item_col: "ItemNumber",
+                        'ItemDisplay': "Item",
+                        'metric_total': f'Total {metric_focus_short}',
+                        'share_pct': '% Contribution',
+                        'cv': 'CV',
+                    },
+                    inplace=True,
+                )
+                display_df['% Contribution'] = display_df['% Contribution'].map(lambda v: f"{v:.1f}%")
+                if display_df['CV'].notna().any():
+                    display_df['CV'] = display_df['CV'].apply(lambda v: f"{v:.2f}" if pd.notna(v) else "—")
+                st.dataframe(display_df.head(25))
+        else:
+            st.info("Not enough item-level data after filters to compute ABC-XYZ classification.")
 
     # Plot selected metric over time for the currently filtered dataset
     if metric_col and metric_col in df_view.columns and ('_date_dt' in df_view.columns or date_col_name):
