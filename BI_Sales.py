@@ -197,7 +197,10 @@ st.sidebar.color_picker(
 )
 if st.session_state["app_bg_color_picker"] != st.session_state["app_bg_color"]:
     st.session_state["app_bg_color"] = st.session_state["app_bg_color_picker"]
-    st.experimental_rerun()
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
 
 st.sidebar.markdown("### Data Source")
 uploaded_file = st.sidebar.file_uploader("Upload SQLite DB", type=["db", "sqlite", "sqlite3"])
