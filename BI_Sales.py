@@ -7,6 +7,70 @@ import calendar
 import os
 import textwrap
 
+
+def _normalize_hex(hex_color: str) -> str:
+    """Return a safe 6-character hex color prefixed with #."""
+    if not isinstance(hex_color, str):
+        return "#0b1220"
+    value = hex_color.strip().lstrip("#")
+    if len(value) == 3:
+        value = "".join(ch * 2 for ch in value)
+    if len(value) != 6:
+        return "#0b1220"
+    try:
+        int(value, 16)
+    except ValueError:
+        return "#0b1220"
+    return f"#{value.lower()}"
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    normalized = _normalize_hex(hex_color)[1:]
+    return tuple(int(normalized[i : i + 2], 16) for i in (0, 2, 4))
+
+
+def _relative_luminance(rgb: tuple[int, int, int]) -> float:
+    r, g, b = rgb
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+
+
+def build_theme_from_background(bg_hex: str) -> dict:
+    """Return derived theme colors ensuring readable text on the chosen background."""
+    normalized = _normalize_hex(bg_hex)
+    luminance = _relative_luminance(_hex_to_rgb(normalized))
+    is_light = luminance > 0.6
+    if is_light:
+        return {
+            "bg_color": normalized,
+            "text_primary": "#0f172a",
+            "text_secondary": "#1e293b",
+            "text_muted": "#475569",
+            "chip_bg": "rgba(15, 23, 42, 0.08)",
+            "chip_text": "#0f172a",
+            "card_bg": "#ffffff",
+            "card_border": "rgba(15, 23, 42, 0.08)",
+            "card_text": "#0f172a",
+            "card_muted": "#475569",
+            "card_secondary": "#64748b",
+            "card_soft": "rgba(15, 23, 42, 0.06)",
+            "progress_track": "rgba(15, 23, 42, 0.08)",
+        }
+    return {
+        "bg_color": normalized,
+        "text_primary": "#f8fafc",
+        "text_secondary": "rgba(248, 250, 252, 0.92)",
+        "text_muted": "rgba(248, 250, 252, 0.75)",
+        "chip_bg": "rgba(248, 250, 252, 0.2)",
+        "chip_text": "#f8fafc",
+        "card_bg": "rgba(15, 23, 42, 0.65)",
+        "card_border": "rgba(248, 250, 252, 0.15)",
+        "card_text": "#f8fafc",
+        "card_muted": "rgba(248, 250, 252, 0.85)",
+        "card_secondary": "rgba(248, 250, 252, 0.72)",
+        "card_soft": "rgba(248, 250, 252, 0.18)",
+        "progress_track": "rgba(248, 250, 252, 0.35)",
+    }
+
 try:
     from statsmodels.tsa.holtwinters import ExponentialSmoothing
     _statsmodels_import_error = None
@@ -19,18 +83,43 @@ st.set_page_config(page_title="Aghzia", layout="wide")
 if "app_bg_color" not in st.session_state:
     st.session_state["app_bg_color"] = "#0b1220"
 
+st.sidebar.color_picker(
+    "App background",
+    value=st.session_state["app_bg_color"],
+    key="app_bg_color_picker",
+)
+if st.session_state["app_bg_color_picker"] != st.session_state["app_bg_color"]:
+    st.session_state["app_bg_color"] = st.session_state["app_bg_color_picker"]
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+
+theme = build_theme_from_background(st.session_state["app_bg_color"])
+
 style_template = textwrap.dedent(
     """
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
         :root {{
-            --card-bg: #ffffff;
-            --card-border: rgba(15, 23, 42, 0.06);
             --surface-soft: {bg_color};
+            --text-primary: {text_primary};
+            --text-secondary: {text_secondary};
+            --text-muted: {text_muted};
+            --chip-bg: {chip_bg};
+            --chip-text: {chip_text};
+            --card-bg: {card_bg};
+            --card-border: {card_border};
+            --card-text: {card_text};
+            --card-muted: {card_muted};
+            --card-secondary: {card_secondary};
+            --card-soft: {card_soft};
+            --progress-track: {progress_track};
         }}
         html, body, [data-testid="stAppViewContainer"], .main {{
             background: var(--surface-soft);
             font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+            color: var(--text-primary);
         }}
         .block-container {{
             padding-top: 1.2rem;
@@ -78,13 +167,14 @@ style_template = textwrap.dedent(
         .kpi-card {{
             border-radius: 20px;
             padding: 1.1rem 1.25rem;
-            background: #ffffff;
-            border: 1px solid rgba(15, 23, 42, 0.08);
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
             box-shadow: none;
             display: flex;
             flex-direction: column;
             gap: 0.45rem;
             width: 100%;
+            color: var(--card-text);
         }}
         .stat-header {{
             display: flex;
@@ -105,14 +195,14 @@ style_template = textwrap.dedent(
             align-items: center;
             justify-content: center;
             font-size: 1.1rem;
-            background: rgba(15, 23, 42, 0.06);
-            color: #0f172a;
+            background: var(--card-soft);
+            color: var(--card-text);
         }}
         .stat-label {{
             font-size: 0.78rem;
             font-weight: 600;
             letter-spacing: 0.08em;
-            color: #475569;
+            color: var(--text-muted);
         }}
         .stat-chip {{
             padding: 0.15rem 0.65rem;
@@ -120,31 +210,31 @@ style_template = textwrap.dedent(
             font-size: 0.72rem;
             font-weight: 600;
             text-transform: uppercase;
-            background: rgba(15, 23, 42, 0.08);
-            color: #0f172a;
+            background: var(--chip-bg);
+            color: var(--chip-text);
         }}
         .stat-value {{
             font-size: 2.05rem;
             font-weight: 700;
-            color: #0f172a;
+            color: var(--text-primary);
             line-height: 1.1;
         }}
         .stat-secondary {{
             font-size: 0.85rem;
-            color: #64748b;
+            color: var(--text-secondary);
             font-weight: 600;
         }}
         .stat-progress {{
             height: 6px;
             width: 100%;
             border-radius: 999px;
-            background: rgba(15, 23, 42, 0.08);
+            background: var(--progress-track);
             overflow: hidden;
         }}
         .stat-progress-bar {{
             height: 100%;
             width: var(--progress, 100%);
-            background: var(--accent, #1e88e5);
+            background: var(--accent, var(--text-primary));
             border-radius: inherit;
             transition: width 0.4s ease;
         }}
@@ -170,7 +260,8 @@ style_template = textwrap.dedent(
             align-items: center;
             padding: 0.2rem 0.75rem;
             border-radius: 999px;
-            background: rgba(15, 23, 42, 0.08);
+            background: var(--chip-bg);
+            color: var(--chip-text);
             font-size: 0.8rem;
             margin: 0 0.25rem 0.3rem 0;
         }}
@@ -178,10 +269,7 @@ style_template = textwrap.dedent(
     """
 )
 
-st.markdown(
-    style_template.format(bg_color=st.session_state["app_bg_color"]),
-    unsafe_allow_html=True,
-)
+st.markdown(style_template.format(**theme), unsafe_allow_html=True)
 
 st.title("BI.Commercial 💵")
 st.markdown(
@@ -189,18 +277,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 kpi_container = st.container()
-
-st.sidebar.color_picker(
-    "App background",
-    value=st.session_state["app_bg_color"],
-    key="app_bg_color_picker",
-)
-if st.session_state["app_bg_color_picker"] != st.session_state["app_bg_color"]:
-    st.session_state["app_bg_color"] = st.session_state["app_bg_color_picker"]
-    if hasattr(st, "rerun"):
-        st.rerun()
-    elif hasattr(st, "experimental_rerun"):
-        st.experimental_rerun()
 
 st.sidebar.markdown("### Data Source")
 uploaded_file = st.sidebar.file_uploader("Upload SQLite DB", type=["db", "sqlite", "sqlite3"])
