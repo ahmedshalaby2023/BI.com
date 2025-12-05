@@ -3,7 +3,13 @@ import sqlite3
 import pandas as pd
 import altair as alt
 import calendar
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+try:
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing
+    _statsmodels_import_error = None
+except ImportError as exc:
+    ExponentialSmoothing = None
+    _statsmodels_import_error = exc
 
 st.set_page_config(page_title="Agthia", layout="wide")
 
@@ -674,7 +680,12 @@ if uploaded_file:
                 st.info("Not enough data to calculate a seasonal index for the current filters.")
 
             # Forecast using Holt-Winters with user parameters
-            if len(monthly_training) >= 12:
+            if ExponentialSmoothing is None:
+                st.info(
+                    "Forecasts require the `statsmodels` package. "
+                    "Please add `statsmodels` to your Streamlit Cloud requirements file to enable this section."
+                )
+            elif len(monthly_training) >= 12:
                 st.subheader(f"{forecast_horizon}-Month Forecast")
                 try:
                     monthly_ts = monthly_training.set_index('MonthStart')['MetricValue']
