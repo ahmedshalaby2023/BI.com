@@ -11,7 +11,7 @@ except ImportError as exc:
     ExponentialSmoothing = None
     _statsmodels_import_error = exc
 
-st.set_page_config(page_title="Agthia", layout="wide")
+st.set_page_config(page_title="Aghzia", layout="wide")
 
 st.title("BI.Commercial 💵")
 st.markdown(
